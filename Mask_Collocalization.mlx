@@ -1,0 +1,139 @@
+% --- Variable Definitions ---
+%Scales
+x_scale = 20.50; % How wide the image really is (in x direction, microns)
+y_scale = 20.75; % How tall the image really is (in y direction, microns)
+
+% Load your binary .tif image; change to get correct name of it
+image = imread('AVG_C1-Retrograde-flow-1.tif');
+
+% Display the modified image
+imshow(image);
+
+[imageHeight, imageWidth, ~] = size(image);
+
+%How large displayed circles are
+displayRadius = 2; %radius shown on illustration
+
+% Path to your XML file
+xmlFile = 'C2-Retrograde-flow_Tracks.xml';
+
+% Read the XML file
+xmlData = xmlread(xmlFile);
+
+% Get all particle elements
+allParticles = xmlData.getElementsByTagName('particle');
+
+% Conversion factors from physical units to pixels
+conversionFactorX = imageWidth / x_scale; % pixels per micron
+conversionFactorY = imageHeight / y_scale; % pixels per micron
+
+% Real Proximity (You change this)
+%  --- The way I have this structured now is this: ---
+% The integer in the numerator will end up being the # of pixels in the x
+% direction that your ROI will cover.
+realProximityThreshold = 6/conversionFactorX % YOU SET THIS. should be in microns
+
+% Define a threshold for proximity to the mask
+proximityThresholdX = round(realProximityThreshold * conversionFactorX); % Adjust as needed, in pixels
+proximityThresholdY = round(realProximityThreshold * conversionFactorY); % Adjust as needed, in pixels
+
+% Initialize a new XML document
+newXmlDocument = com.mathworks.xml.XMLUtils.createDocument('root');
+
+% Create the root element
+rootElement = newXmlDocument.getDocumentElement;
+
+% Initialize matrices to hold the X and Y coordinates of centers ON THE MASK;
+% Only for display purposes
+xCoords = [];
+yCoords = [];
+
+% Initialize matrices to hold the X and Y coordinates of ALL CENTERS;
+% Only for display purposes
+anyXCoords = [];
+anyYCoords = [];
+
+% --- Main Section ---
+% Loop over all particle elements
+for i = 0:allParticles.getLength-1
+    particle = allParticles.item(i);
+    
+    % Check if the particle has detections at t="0"
+    detections = particle.getElementsByTagName('detection');
+    hasDetectionAtT0 = false;
+    for j = 0:detections.getLength-1
+        detection = detections.item(j);
+        if strcmp(detection.getAttribute('t'), '0')
+
+            % Copying the particles for the visualization, to any particle
+            % list
+            anyXCoords(end+1) = str2double(detection.getAttribute('x')) * conversionFactorX;
+            anyYCoords(end+1) = str2double(detection.getAttribute('y')) * conversionFactorY;
+
+            hasDetectionAtT0 = true;
+            % Check if the detection is on or near the mask
+            detectionX = str2double(detection.getAttribute('x')) * conversionFactorX;
+            detectionY = str2double(detection.getAttribute('y')) * conversionFactorY;
+            
+            % Need to change this to an ellipse...
+            cx = round(detectionX);
+            cy = round(detectionY);
+
+            % Calculate the bounds of the square around the center
+            minX = max(1, cx - proximityThresholdX);
+            maxX = min(imageWidth, cx + proximityThresholdX);
+            minY = max(1, cy - proximityThresholdY);
+            maxY = min(imageHeight, cy + proximityThresholdY);
+
+            % Extract the region of interest (ROI) within the square
+            roi = image(minY:maxY, minX:maxX);
+
+            if any(roi(:) == 255) % Assumes mask goes from 0 to 255
+                % If the detection is on or near the mask, add the particle to the new XML document
+                newParticle = newXmlDocument.createElement('particle');
+                newParticle.setAttribute('nSpots', particle.getAttribute('nSpots'));
+
+                % Copying the particles for the visualization, to filtered
+                % particle list
+                xCoords(end+1) = str2double(detection.getAttribute('x')) * conversionFactorX;
+                yCoords(end+1) = str2double(detection.getAttribute('y')) * conversionFactorY;
+
+                % Copy detections to the new particle
+                for k = 0:detections.getLength-1
+                    newDetection = newXmlDocument.createElement('detection');
+                    detection = detections.item(k);
+                    % Copy attributes
+                    newDetection.setAttribute('t', detection.getAttribute('t'));
+                    newDetection.setAttribute('x', detection.getAttribute('x'));
+                    newDetection.setAttribute('y', detection.getAttribute('y'));
+                    newDetection.setAttribute('z', detection.getAttribute('z'));
+                    newParticle.appendChild(newDetection);
+                end
+                % Append the new particle to the root element
+                rootElement.appendChild(newParticle);
+                break; % No need to check further detections for this particle
+            end
+        end
+    end
+end
+
+centers = [anyXCoords' anyYCoords'];
+filteredCenters = [xCoords' yCoords'];
+
+% For circle drawing purposes
+theta = linspace(0, 2*pi, 100);
+
+% Draw red circles on the image at all droplet centers at t=0
+% viscircles(centers, displayRadius * ones(size(centers, 1), 1), 'Color', 'r');
+for i = 1:length(anyXCoords)
+    rectangle('Position', [anyXCoords(i)-displayRadius, anyYCoords(i)-displayRadius, 2*displayRadius, 2*displayRadius], 'Curvature', [1,1], 'EdgeColor', "c", 'FaceColor', 'c');
+end
+
+% Draw blue circles on the image at the filtered centers at t=0
+% viscircles(filteredCenters, displayRadius * ones(size(filteredCenters, 1), 1), 'Color', 'b');
+for i = 1:length(xCoords)
+    rectangle('Position', [xCoords(i)-displayRadius, yCoords(i)-displayRadius, 2*displayRadius, 2*displayRadius], 'Curvature', [1,1], 'EdgeColor', "r", 'FaceColor', 'r');
+end
+
+% Write the XML document to a file
+xmlwrite('output.xml', newXmlDocument);
